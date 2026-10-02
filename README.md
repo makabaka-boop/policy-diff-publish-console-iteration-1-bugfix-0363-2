@@ -64,6 +64,9 @@ main.go   HTTP 服务（:8080），嵌入 web/dist 并做 SPA fallback
 | GET | `/api/decisions/{draft\|published}` | 某版本全量元组裁决与证据（published 叠加生效例外） |
 | GET | `/api/exceptions` | 当前生效例外列表 + 服务端裁决时钟 |
 | POST | `/api/exceptions` | 携带 `{tuple, reason, ttlMinutes(1–60), publishedRevision}` 建立应急例外 |
+| GET | `/api/exception-batches` | 全部批次（含已终结）及 `active` 标记 + 统一裁决时刻 |
+| POST | `/api/exception-batches` | 携带 `{tuples, publishedRevision, ttlMinutes, reason}` 原子建立一批例外 |
+| POST | `/api/exception-batches/renew` | 携带 `{id, minutes, publishedRevision}` 统一续期仍生效的批次 |
 | POST | `/api/demo/reset` | 重置为内置演示策略（立即清空全部例外） |
 
 ## 构建与运行
@@ -113,6 +116,18 @@ go run .                                  # 后端 :8080
 5. **草稿/预览不被污染**：例外生效期间草稿矩阵仍按规则 deny，预览 diff
    不出现该元组。
 
+例外批次（`store/exception_batch_test.go` 与 `api/exception_batch_test.go`）覆盖：
+
+1. **整批原子**：任一成员无效（域外/当前 allow/批内重复/与生效例外冲突）则整批拒绝，
+   例外列表、批次注册表、矩阵均无部分状态。
+2. **同生同灭**：全体成员共享同一到期时刻；续期统一顺延；到期后批次永久终结，
+   `409 batch_expired`，成员不得复活。
+3. **发布永久失效**：发布后旧批次续期返回 `409 published_moved`（即使携带新修订号），
+   成员不复活、不附着到新发布版本。
+4. **四视图一致**：批次列表（含 `active` 派生标记）、单项列表、已发布矩阵、原拒绝
+   证据在任何时刻描述同一生效集合；并发续期 × 批次列表 × 矩阵读取在 `-race` 下无
+   混合状态。
+
 页面测试（`web/test/`，`cd web && npm test`，vitest + happy-dom）覆盖矩阵
 单元放行与原 deny 证据同框展示、创建表单仅出现在已发布 deny 格、TTL 边界
 本地拦截、`published_moved`/`tuple_not_denied` 错误不乐观放行、发布/重置后
@@ -120,8 +135,20 @@ go run .                                  # 后端 :8080
 
 
 ## 例外批次
-POST /api/exception-batches 建立一批同修订、同期限的精确元组例外，全部成功或全部失败。
-GET /api/exception-batches 给出批次成员；/renew 续期只允许仍属于原发布修订的全部活跃成员。
-到期成员不得复活，发布使整个旧批次永久失效。批次、单项列表、已发布决策和原拒绝证据一致，
-草稿与预览不包含临时放行，旧单项接口保持不变。
+
+- **原子建批**：`POST /api/exception-batches` 接受 1–32 个精确元组（与单项创建同一套校验）。
+  服务端在同一临界区内先对**全部**元组重新裁决——任一无效（域外、当前实为 allow、批内
+  重复、与生效例外冲突、修订已推进）即整批拒绝、不留任何部分状态；全部通过才统一落库并
+  登记批次。批次要么完整存在于批次列表/单项列表/已发布矩阵，要么完全不存在。全体成员共享
+  同一裁决时刻、同一到期时间、同一理由与同一钉住修订，同生同灭。
+- **批次列表**：`GET /api/exception-batches` 返回 `{batches, publishedRevision, now}`，
+  与单项列表、矩阵共用同一裁决时刻。每个批次带派生 `active` 标记（仍钉在当前已发布修订
+  且全员生效才为 true）；已终结批次保留完整成员记录可查，但永不恢复生效。
+- **统一续期**：`POST /api/exception-batches/renew` 仅当请求修订为当前已发布修订、批次仍
+  钉在该修订、且全体成员仍生效时才成功，全员到期时间统一顺延为当前时刻 + minutes（1–60）。
+  成员已到期 → `409 batch_expired`（到期成员不得复活，已终结批次永远无法重新启用）；
+  发布/重置使旧批次永久失效 → `409 published_moved`（即使请求携带新修订号，旧批次成员
+  也不会附着到新发布版本）；未知批次 → `404 batch_not_found`。
+- 批次列表、单项例外列表、已发布决策矩阵与原拒绝证据始终描述同一生效集合；草稿与预览
+  不含临时放行；单项接口（`POST/GET /api/exceptions`）行为不变。
 

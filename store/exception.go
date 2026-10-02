@@ -121,32 +121,12 @@ func (s *Store) CreateEmergencyException(req *CreateExceptionRequest) (*Exceptio
 	if err != nil {
 		return nil, err
 	}
-	if !eng.Contains(req.Tuple) {
-		return nil, fmt.Errorf("%w: tuple %s/%s/%s is not part of the published finite domain",
-			ErrInvalidException, req.Tuple.Role, req.Tuple.Resource, req.Tuple.Action)
+	original, err := s.validateTupleLocked(eng, live, req.Tuple)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, ex := range live {
-		if ex.Tuple == req.Tuple {
-			return nil, ErrExceptionExists
-		}
-	}
-
-	original := eng.Decide(req.Tuple)
-	if original.Decision != policy.EffectDeny {
-		return nil, ErrTupleNotDenied
-	}
-
-	s.exceptionSeq++
-	ex := &EmergencyException{
-		ID:                fmt.Sprintf("ex-%d", s.exceptionSeq),
-		Tuple:             req.Tuple,
-		Reason:            req.Reason,
-		CreatedAt:         now,
-		ExpiresAt:         now.Add(ttl),
-		PublishedRevision: s.published.Revision,
-	}
-	s.exceptions = append(s.exceptions, ex)
+	ex := s.addExceptionLocked(req.Tuple, req.Reason, ttl, now)
 
 	row := DecisionRow{
 		Tuple:     req.Tuple,
@@ -159,6 +139,45 @@ func (s *Store) CreateEmergencyException(req *CreateExceptionRequest) (*Exceptio
 		Now:       now,
 		Decision:  row,
 	}, nil
+}
+
+// validateTupleLocked re-adjudicates one tuple against the CURRENT
+// published engine and the live exception set, under the store mutex.
+// It returns the original deny evidence on success; any failure rejects
+// the tuple before any state is recorded. Shared by the single-exception
+// endpoint and batch creation so both adjudicate identically.
+func (s *Store) validateTupleLocked(eng *policy.Engine, live []*EmergencyException, tuple policy.Tuple) (policy.Evidence, error) {
+	if !eng.Contains(tuple) {
+		return policy.Evidence{}, fmt.Errorf("%w: tuple %s/%s/%s is not part of the published finite domain",
+			ErrInvalidException, tuple.Role, tuple.Resource, tuple.Action)
+	}
+	for _, ex := range live {
+		if ex.Tuple == tuple {
+			return policy.Evidence{}, ErrExceptionExists
+		}
+	}
+	original := eng.Decide(tuple)
+	if original.Decision != policy.EffectDeny {
+		return policy.Evidence{}, ErrTupleNotDenied
+	}
+	return original, nil
+}
+
+// addExceptionLocked records one exception under the shared clock
+// reading and returns it. The exception is pinned to the current
+// published revision; ids are store-global and never reused.
+func (s *Store) addExceptionLocked(tuple policy.Tuple, reason string, ttl time.Duration, now time.Time) *EmergencyException {
+	s.exceptionSeq++
+	ex := &EmergencyException{
+		ID:                fmt.Sprintf("ex-%d", s.exceptionSeq),
+		Tuple:             tuple,
+		Reason:            reason,
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(ttl),
+		PublishedRevision: s.published.Revision,
+	}
+	s.exceptions = append(s.exceptions, ex)
+	return ex
 }
 
 // pruneExceptionsLocked drops every exception that has expired at or

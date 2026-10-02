@@ -275,10 +275,17 @@ describe('DecisionMatrix — emergency exception page semantics', () => {
   })
 
   it('restores the original verdict after expiry on refetch (no background task)', async () => {
+    // Anchor the fixture to the real clock: the countdown is rendered
+    // from Date.now(), so a hardcoded past timestamp would already be
+    // expired whenever the suite actually runs.
+    const now = Date.now()
+    const live = exceptionRow()
+    live.exception.createdAt = new Date(now - 60_000).toISOString()
+    live.exception.expiresAt = new Date(now + 5 * 60_000).toISOString()
     let calls = 0
     global.fetch = vi.fn(async () => {
       calls++
-      const rows = calls === 1 ? [exceptionRow()] : [denyRow({
+      const rows = calls === 1 ? [live] : [denyRow({
         tuple: { role: 'base', resource: 'doc', action: 'write' },
       })]
       return jsonRes(200, { version: 'published', revision: 1, rows })
@@ -286,7 +293,7 @@ describe('DecisionMatrix — emergency exception page semantics', () => {
     const w = mount(DecisionMatrix, {
       props: {
         version: 'published', bump: 0, publishedRevision: 1,
-        serverNow: '2026-10-02T08:00:00Z', nowTick: 0,
+        serverNow: new Date(now).toISOString(), nowTick: 0,
       },
     })
     await flushPromises()

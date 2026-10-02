@@ -46,7 +46,11 @@ type Store struct {
 	// exceptionSeq is store-global; ids must never be reused after a
 	// publish/reset purge.
 	exceptionSeq int64
-	batches      map[string]*ExceptionBatch
+	// batches records every exception batch ever created here, including
+	// terminated ones (expired members or a superseded pinned revision),
+	// so a batch's full membership stays auditable after it stops being
+	// effective. Terminated batches can never be renewed back to life.
+	batches map[string]*ExceptionBatch
 
 	// now is injectable for deterministic TTL-boundary tests.
 	now func() time.Time
@@ -72,6 +76,7 @@ func NewWithClock(initial *policy.Document, now func() time.Time) (*Store, error
 	return &Store{
 		draft:     Versioned{Document: doc, Revision: 1},
 		published: Versioned{Document: doc.Clone(), Revision: 1},
+		batches:   map[string]*ExceptionBatch{},
 		now:       now,
 	}, nil
 }
@@ -255,7 +260,10 @@ func (s *Store) Publish(draftRev, pubRev int, sum *policy.Summary) (*PublishResu
 	// A new published revision invalidates every emergency exception
 	// immediately, in the same critical section: a late create carrying
 	// the old revision can never attach to this revision, and a matrix
-	// read after publish can never see an exception for old rules.
+	// read after publish can never see an exception for old rules. Batch
+	// records are kept for audit, but their pinned revision no longer
+	// matches, so they are permanently terminated — renewal can never
+	// re-attach their members to this revision.
 	s.exceptions = nil
 
 	sumOut := *fresh
