@@ -263,6 +263,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errResp{Error: err.Error(), Code: "exception_exists"})
 	case errors.Is(err, store.ErrExceptionRevisionMoved):
 		writeJSON(w, http.StatusConflict, errResp{Error: err.Error(), Code: "published_moved"})
+	case errors.Is(err, store.ErrExceptionBatchNotFound):
+		writeJSON(w, http.StatusNotFound, errResp{Error: err.Error(), Code: "batch_not_found"})
+	case errors.Is(err, store.ErrExceptionBatchExpired):
+		writeJSON(w, http.StatusConflict, errResp{Error: err.Error(), Code: "batch_expired"})
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

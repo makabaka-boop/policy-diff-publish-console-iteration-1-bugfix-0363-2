@@ -46,7 +46,14 @@ type Store struct {
 	// exceptionSeq is store-global; ids must never be reused after a
 	// publish/reset purge.
 	exceptionSeq int64
-	batches      map[string]*ExceptionBatch
+	// batches records every exception batch ever created on this store.
+	// Only batches whose members are all live exceptions pinned to the
+	// current published revision are effective (listed and renewable);
+	// expiry terminates a batch's members and a publish invalidates the
+	// whole batch permanently, without either ever being resurrected.
+	batches map[string]*ExceptionBatch
+	// batchSeq is store-global and monotonic, like exceptionSeq.
+	batchSeq int64
 
 	// now is injectable for deterministic TTL-boundary tests.
 	now func() time.Time

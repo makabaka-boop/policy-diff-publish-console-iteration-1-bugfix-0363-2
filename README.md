@@ -64,6 +64,9 @@ main.go   HTTP 服务（:8080），嵌入 web/dist 并做 SPA fallback
 | GET | `/api/decisions/{draft\|published}` | 某版本全量元组裁决与证据（published 叠加生效例外） |
 | GET | `/api/exceptions` | 当前生效例外列表 + 服务端裁决时钟 |
 | POST | `/api/exceptions` | 携带 `{tuple, reason, ttlMinutes(1–60), publishedRevision}` 建立应急例外 |
+| POST | `/api/exception-batches` | 携带 `{tuples, reason, ttlMinutes(1–60), publishedRevision}` 原子建立一批例外（全部成功或全部失败） |
+| GET | `/api/exception-batches` | 当前仍有效的批次及成员（与例外列表、裁决矩阵同一生效范围） |
+| POST | `/api/exception-batches/renew` | 携带 `{id, minutes, publishedRevision}` 统一续期仍全员有效的批次；已到期或已被发布终结的批次拒绝 |
 | POST | `/api/demo/reset` | 重置为内置演示策略（立即清空全部例外） |
 
 ## 构建与运行
@@ -112,6 +115,13 @@ go run .                                  # 后端 :8080
    当前结论为临时 allow 且绑定当前已发布修订」恒成立。
 5. **草稿/预览不被污染**：例外生效期间草稿矩阵仍按规则 deny，预览 diff
    不出现该元组。
+
+例外批次（`store/exception_batch_test.go` 与 `api/exception_batch_test.go`）覆盖：
+创建整批原子（尾项非法时前面组合不留任何放行、不留半个批次记录）；续期只延长
+仍全员存活且钉在当前发布修订的批次；到期批次续期返回 `batch_expired` 且不复活
+成员；发布后旧批次对新旧修订的续期均返回 `published_moved`，永不附着到新版本；
+批次列表/例外列表/已发布裁决在创建、续期、到期、发布各时刻描述同一生效范围；
+另有并发创建 × 续期 × 发布 × 列举的 `-race` 混合状态压测。
 
 页面测试（`web/test/`，`cd web && npm test`，vitest + happy-dom）覆盖矩阵
 单元放行与原 deny 证据同框展示、创建表单仅出现在已发布 deny 格、TTL 边界
